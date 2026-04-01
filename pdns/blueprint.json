@@ -1,0 +1,201 @@
+{
+  "blueprint": {
+    "name": "PowerDNS 3-Node Cluster",
+    "description": "Three-node PowerDNS authoritative DNS cluster on Ubuntu 24.04 LTS, CIS Level 1 hardened. Node 1 acts as the primary (hosts MariaDB backend + PowerDNS). Nodes 2 and 3 are secondaries (PowerDNS only, connecting to the primary DB).",
+    "type": "morpheus",
+    "config": {
+      "tiers": {
+        "pdns-primary": {
+          "linkedTiers": [],
+          "tierIndex": 1,
+          "instances": [
+            {
+              "instance": {
+                "type": "ubuntu",
+                "name": "${app.name}-pdns-01",
+                "description": "PowerDNS Primary Node (MariaDB + pdns-server)",
+                "layout": {
+                  "code": "ubuntu-2404-single",
+                  "id": 0
+                },
+                "plan": {
+                  "code": "vm-2048"
+                },
+                "config": {
+                  "createUser": true,
+                  "resourcePoolId": null,
+                  "smbiosAssetTag": null,
+                  "nestedVirtualization": null,
+                  "vmwareFolderId": null
+                },
+                "volumes": [
+                  {
+                    "rootVolume": true,
+                    "name": "root",
+                    "size": 40,
+                    "storageType": 1
+                  }
+                ],
+                "networkInterfaces": [
+                  {
+                    "primaryInterface": true,
+                    "network": {
+                      "idName": "Management",
+                      "pool": {
+                        "idName": "Default Pool"
+                      }
+                    },
+                    "ipMode": "dhcp"
+                  }
+                ],
+                "taskSet": {
+                  "name": "pdns-primary-setup"
+                }
+              }
+            }
+          ]
+        },
+        "pdns-secondary": {
+          "linkedTiers": ["pdns-primary"],
+          "tierIndex": 2,
+          "instances": [
+            {
+              "instance": {
+                "type": "ubuntu",
+                "name": "${app.name}-pdns-02",
+                "description": "PowerDNS Secondary Node 2 (pdns-server only)",
+                "layout": {
+                  "code": "ubuntu-2404-single",
+                  "id": 0
+                },
+                "plan": {
+                  "code": "vm-2048"
+                },
+                "config": {
+                  "createUser": true,
+                  "resourcePoolId": null
+                },
+                "volumes": [
+                  {
+                    "rootVolume": true,
+                    "name": "root",
+                    "size": 40,
+                    "storageType": 1
+                  }
+                ],
+                "networkInterfaces": [
+                  {
+                    "primaryInterface": true,
+                    "network": {
+                      "idName": "Management",
+                      "pool": {
+                        "idName": "Default Pool"
+                      }
+                    },
+                    "ipMode": "dhcp"
+                  }
+                ],
+                "taskSet": {
+                  "name": "pdns-secondary-setup"
+                }
+              }
+            },
+            {
+              "instance": {
+                "type": "ubuntu",
+                "name": "${app.name}-pdns-03",
+                "description": "PowerDNS Secondary Node 3 (pdns-server only)",
+                "layout": {
+                  "code": "ubuntu-2404-single",
+                  "id": 0
+                },
+                "plan": {
+                  "code": "vm-2048"
+                },
+                "config": {
+                  "createUser": true,
+                  "resourcePoolId": null
+                },
+                "volumes": [
+                  {
+                    "rootVolume": true,
+                    "name": "root",
+                    "size": 40,
+                    "storageType": 1
+                  }
+                ],
+                "networkInterfaces": [
+                  {
+                    "primaryInterface": true,
+                    "network": {
+                      "idName": "Management",
+                      "pool": {
+                        "idName": "Default Pool"
+                      }
+                    },
+                    "ipMode": "dhcp"
+                  }
+                ],
+                "taskSet": {
+                  "name": "pdns-secondary-setup"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "options": [
+        {
+          "name": "pdns_api_key",
+          "label": "PowerDNS API Key",
+          "description": "API key for the PowerDNS HTTP API",
+          "type": "password",
+          "required": true,
+          "defaultValue": "",
+          "fieldName": "pdns_api_key",
+          "fieldContext": "config"
+        },
+        {
+          "name": "db_root_password",
+          "label": "MariaDB Root Password",
+          "description": "Root password for the MariaDB instance on the primary node",
+          "type": "password",
+          "required": true,
+          "defaultValue": "",
+          "fieldName": "db_root_password",
+          "fieldContext": "config"
+        },
+        {
+          "name": "db_pdns_password",
+          "label": "PowerDNS DB User Password",
+          "description": "Password for the 'pdns' MariaDB user",
+          "type": "password",
+          "required": true,
+          "defaultValue": "",
+          "fieldName": "db_pdns_password",
+          "fieldContext": "config"
+        },
+        {
+          "name": "pdns_recursor_enable",
+          "label": "Enable PowerDNS Recursor",
+          "description": "Install and configure pdns-recursor on all nodes",
+          "type": "checkbox",
+          "required": false,
+          "defaultValue": "off",
+          "fieldName": "pdns_recursor_enable",
+          "fieldContext": "config"
+        },
+        {
+          "name": "cis_grub_password_hash",
+          "label": "GRUB Bootloader Password Hash (CIS 1.4.1)",
+          "description": "Optional. Provide a GRUB2 pbkdf2 password hash (generated with grub-mkpasswd-pbkdf2) to set a bootloader password per CIS 1.4.1. Leave blank to skip.",
+          "type": "password",
+          "required": false,
+          "defaultValue": "",
+          "fieldName": "cis_grub_password_hash",
+          "fieldContext": "config"
+        }
+      ]
+    }
+  }
+}
