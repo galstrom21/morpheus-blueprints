@@ -22,7 +22,7 @@ echo "==> [CIS] Starting Level 1 hardening for Ubuntu 24.04..."
 # -- 1.1.1 Disable unused/unnecessary filesystems --
 echo "==> [CIS 1.1.1] Disabling unused filesystems..."
 MODPROBE_CONF=/etc/modprobe.d/cis-disable-filesystems.conf
-cat > "${MODPROBE_CONF}" <<'MODS'
+cat >"${MODPROBE_CONF}" <<'MODS'
 install cramfs   /bin/false
 blacklist cramfs
 install freevxfs /bin/false
@@ -50,7 +50,7 @@ MODS
 # -- 1.1.2 /tmp: enforce nodev, nosuid, noexec --
 echo "==> [CIS 1.1.2] Hardening /tmp mount options..."
 if ! grep -q "^tmpfs /tmp " /etc/fstab; then
-  echo "tmpfs /tmp tmpfs defaults,rw,nosuid,nodev,noexec,relatime 0 0" >> /etc/fstab
+  echo "tmpfs /tmp tmpfs defaults,rw,nosuid,nodev,noexec,relatime 0 0" >>/etc/fstab
 fi
 mount -o remount,nodev,nosuid,noexec /tmp 2>/dev/null || true
 
@@ -59,14 +59,14 @@ echo "==> [CIS 1.1.3] Hardening /dev/shm mount options..."
 if grep -q "^tmpfs /dev/shm" /etc/fstab; then
   sed -i 's|^\(tmpfs /dev/shm.*\)defaults|\1defaults,nodev,nosuid,noexec|' /etc/fstab
 else
-  echo "tmpfs /dev/shm tmpfs defaults,nodev,nosuid,noexec 0 0" >> /etc/fstab
+  echo "tmpfs /dev/shm tmpfs defaults,nodev,nosuid,noexec 0 0" >>/etc/fstab
 fi
 mount -o remount,nodev,nosuid,noexec /dev/shm 2>/dev/null || true
 
 # -- 1.1.4 Sticky bit on all world-writable directories --
 echo "==> [CIS 1.1.4] Setting sticky bit on world-writable directories..."
-df --local -P | awk 'NR!=1 {print $6}' | xargs -I '{}' find '{}' -xdev -type d \( -perm -0002 -a ! -perm -1000 \) 2>/dev/null \
-  | xargs chmod a+t 2>/dev/null || true
+df --local -P | awk 'NR!=1 {print $6}' | xargs -I '{}' find '{}' -xdev -type d \( -perm -0002 -a ! -perm -1000 \) 2>/dev/null |
+  xargs chmod a+t 2>/dev/null || true
 
 # =============================================================================
 # 2. SOFTWARE UPDATES
@@ -75,7 +75,7 @@ df --local -P | awk 'NR!=1 {print $6}' | xargs -I '{}' find '{}' -xdev -type d \
 # -- 1.9 Ensure updates and security patches are applied --
 echo "==> [CIS 1.9] Configuring automatic security updates..."
 apt-get install -y unattended-upgrades apt-listchanges
-cat > /etc/apt/apt.conf.d/50unattended-upgrades <<'APT_CONF'
+cat >/etc/apt/apt.conf.d/50unattended-upgrades <<'APT_CONF'
 Unattended-Upgrade::Allowed-Origins {
     "${distro_id}:${distro_codename}";
     "${distro_id}:${distro_codename}-security";
@@ -87,14 +87,14 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 Unattended-Upgrade::Automatic-Reboot "false";
 APT_CONF
 
-cat > /etc/apt/apt.conf.d/20auto-upgrades <<'APT_CONF'
+cat >/etc/apt/apt.conf.d/20auto-upgrades <<'APT_CONF'
 APT::Periodic::Update-Package-Lists "1";
 APT::Periodic::Unattended-Upgrade "1";
 APT::Periodic::AutocleanInterval "7";
 APT_CONF
 
 systemctl enable unattended-upgrades
-systemctl start  unattended-upgrades
+systemctl start unattended-upgrades
 
 # =============================================================================
 # 3. FILESYSTEM INTEGRITY (AIDE)
@@ -104,11 +104,20 @@ systemctl start  unattended-upgrades
 echo "==> [CIS 1.3] Installing and configuring AIDE..."
 apt-get install -y aide aide-common
 
+# Exclude the PowerDNS SQLite3 database from AIDE monitoring.
+# This file is written on every DNS query/zone change; monitoring it would
+# generate constant false positives and obscure genuine integrity alerts.
+cat >>/etc/aide/aide.conf <<'AIDE_EXCL'
+
+# PowerDNS SQLite3 backend – excluded because it changes on every DNS write
+!/var/lib/powerdns/pdns\.db.*
+AIDE_EXCL
+
 # Initialise the database (runs in background – can take a few minutes)
 aideinit --yes 2>/dev/null &
 
 # Daily integrity check via cron
-cat > /etc/cron.daily/aide-check <<'CRON'
+cat >/etc/cron.daily/aide-check <<'CRON'
 #!/bin/sh
 /usr/bin/aide --config=/etc/aide/aide.conf --check 2>&1 | logger -t aide
 CRON
@@ -125,7 +134,7 @@ echo "==> [CIS 1.4.2] Securing bootloader configuration..."
 # -- 1.4.1 GRUB password (optional – set via Morpheus cis_grub_password_hash option) --
 GRUB_PW_HASH="${cis_grub_password_hash:-}"
 if [[ -n "${GRUB_PW_HASH}" ]]; then
-  cat > /etc/grub.d/40_custom_cis_password <<GRUBPW
+  cat >/etc/grub.d/40_custom_cis_password <<GRUBPW
 #!/bin/sh
 exec tail -n +3 \$0
 set superusers="root"
@@ -145,7 +154,7 @@ fi
 echo "==> [CIS 1.5] Configuring process hardening..."
 
 # -- 1.5.1 Restrict core dumps --
-cat > /etc/security/limits.d/cis-core-dumps.conf <<'LIMITS'
+cat >/etc/security/limits.d/cis-core-dumps.conf <<'LIMITS'
 *    hard    core    0
 LIMITS
 
@@ -171,7 +180,7 @@ fi
 update-grub 2>/dev/null || true
 
 systemctl enable apparmor
-systemctl start  apparmor
+systemctl start apparmor
 
 # Set all profiles to enforce mode
 aa-enforce /etc/apparmor.d/* 2>/dev/null || true
@@ -183,9 +192,9 @@ aa-enforce /etc/apparmor.d/* 2>/dev/null || true
 echo "==> [CIS 1.7] Configuring login banners..."
 BANNER_TEXT="Authorized uses only. All activity may be monitored and reported."
 
-printf '%s\n' "${BANNER_TEXT}" > /etc/motd
-printf '%s\n' "${BANNER_TEXT}" > /etc/issue
-printf '%s\n' "${BANNER_TEXT}" > /etc/issue.net
+printf '%s\n' "${BANNER_TEXT}" >/etc/motd
+printf '%s\n' "${BANNER_TEXT}" >/etc/issue
+printf '%s\n' "${BANNER_TEXT}" >/etc/issue.net
 
 chmod 644 /etc/motd /etc/issue /etc/issue.net
 
@@ -203,7 +212,7 @@ UNWANTED_SERVICES=(
   slapd
   nfs-server
   rpcbind
-  named          # CIS says disable; our pdns-server handles DNS instead
+  named # CIS says disable; our pdns-server handles DNS instead
   vsftpd
   apache2
   nginx
@@ -222,9 +231,9 @@ UNWANTED_SERVICES=(
 
 for svc in "${UNWANTED_SERVICES[@]}"; do
   if systemctl list-unit-files --type=service | grep -q "^${svc}\.service"; then
-    systemctl stop    "${svc}" 2>/dev/null || true
+    systemctl stop "${svc}" 2>/dev/null || true
     systemctl disable "${svc}" 2>/dev/null || true
-    systemctl mask    "${svc}" 2>/dev/null || true
+    systemctl mask "${svc}" 2>/dev/null || true
   fi
 done
 
@@ -236,6 +245,8 @@ UNWANTED_PKGS=(
   talk
   ldap-utils
   ftp
+  mariadb-server
+  mariadb-client
 )
 for pkg in "${UNWANTED_PKGS[@]}"; do
   apt-get purge -y "${pkg}" 2>/dev/null || true
@@ -243,7 +254,7 @@ done
 
 # -- 2.2.1 Ensure time synchronization is in use --
 apt-get install -y chrony
-systemctl enable  chrony
+systemctl enable chrony
 systemctl restart chrony
 
 # Configure MTA for local-only (CIS 2.2.15)
@@ -257,7 +268,7 @@ fi
 # =============================================================================
 
 echo "==> [CIS 3.x] Applying network sysctl hardening..."
-cat > /etc/sysctl.d/99-cis-hardening.conf <<'SYSCTL'
+cat >/etc/sysctl.d/99-cis-hardening.conf <<'SYSCTL'
 # --- CIS 3.1: Disable IP forwarding (DNS servers are not routers) ---
 net.ipv4.ip_forward                    = 0
 net.ipv6.conf.all.forwarding           = 0
@@ -320,7 +331,7 @@ sysctl --system
 echo "==> [CIS 4.1] Configuring auditd..."
 apt-get install -y auditd audispd-plugins
 
-cat > /etc/audit/rules.d/cis-level1.rules <<'AUDIT'
+cat >/etc/audit/rules.d/cis-level1.rules <<'AUDIT'
 # Delete all existing rules
 -D
 
@@ -405,6 +416,9 @@ cat > /etc/audit/rules.d/cis-level1.rules <<'AUDIT'
 # --- Sudo log file (CIS 4.1.15) ---
 -w /var/log/sudo.log -p wa -k actions
 
+# --- PowerDNS SQLite3 database – audit writes (zone/record changes) ---
+-w /var/lib/powerdns/pdns.db -p wa -k pdns-db-change
+
 # --- Kernel module loading (CIS 4.1.16) ---
 -w /sbin/insmod  -p x -k modules
 -w /sbin/rmmod   -p x -k modules
@@ -416,8 +430,8 @@ cat > /etc/audit/rules.d/cis-level1.rules <<'AUDIT'
 AUDIT
 
 # Configure auditd to halt on full log (CIS 4.1.1.2 / 4.1.1.3)
-sed -i 's/^space_left_action.*/space_left_action = email/'    /etc/audit/auditd.conf
-sed -i 's/^action_mail_acct.*/action_mail_acct = root/'       /etc/audit/auditd.conf
+sed -i 's/^space_left_action.*/space_left_action = email/' /etc/audit/auditd.conf
+sed -i 's/^action_mail_acct.*/action_mail_acct = root/' /etc/audit/auditd.conf
 sed -i 's/^admin_space_left_action.*/admin_space_left_action = halt/' /etc/audit/auditd.conf
 
 # Ensure auditd starts before other services (CIS 4.1.1.1)
@@ -433,7 +447,7 @@ systemctl restart auditd
 echo "==> [CIS 4.2] Configuring rsyslog..."
 apt-get install -y rsyslog
 
-cat >> /etc/rsyslog.conf <<'RSYS'
+cat >>/etc/rsyslog.conf <<'RSYS'
 # CIS: Ensure file creation mode is correct
 $FileCreateMode 0640
 RSYS
@@ -441,7 +455,7 @@ RSYS
 # CIS 4.2.1.3 – Ensure rsyslog default file permissions
 sed -i 's/^\$FileCreateMode.*/\$FileCreateMode 0640/' /etc/rsyslog.conf
 
-systemctl enable  rsyslog
+systemctl enable rsyslog
 systemctl restart rsyslog
 
 # =============================================================================
@@ -460,7 +474,7 @@ ssh_set() {
   if grep -qiE "^#?[[:space:]]*${key}[[:space:]]" "${SSHD_CONF}"; then
     sed -i -E "s|^#?[[:space:]]*${key}[[:space:]].*|${key} ${val}|" "${SSHD_CONF}"
   else
-    echo "${key} ${val}" >> "${SSHD_CONF}"
+    echo "${key} ${val}" >>"${SSHD_CONF}"
   fi
 }
 
@@ -468,30 +482,30 @@ ssh_set() {
 find /etc/ssh -xdev -type f -name 'ssh_host_*_key' -exec chmod 600 {} \;
 find /etc/ssh -xdev -type f -name 'ssh_host_*_key.pub' -exec chmod 644 {} \;
 
-ssh_set "Protocol"                    "2"
-ssh_set "LogLevel"                    "VERBOSE"
-ssh_set "LoginGraceTime"              "60"
-ssh_set "PermitRootLogin"             "no"
-ssh_set "StrictModes"                 "yes"
-ssh_set "MaxAuthTries"                "4"
-ssh_set "MaxSessions"                 "4"
-ssh_set "PubkeyAuthentication"        "yes"
-ssh_set "IgnoreRhosts"                "yes"
-ssh_set "HostbasedAuthentication"     "no"
-ssh_set "PermitEmptyPasswords"        "no"
-ssh_set "PermitUserEnvironment"       "no"
-ssh_set "X11Forwarding"               "no"
-ssh_set "PrintLastLog"                "yes"
-ssh_set "TCPKeepAlive"                "no"
-ssh_set "AllowTcpForwarding"          "no"
-ssh_set "AllowAgentForwarding"        "no"
-ssh_set "GatewayPorts"                "no"
-ssh_set "ClientAliveInterval"         "300"
-ssh_set "ClientAliveCountMax"         "3"
-ssh_set "Banner"                      "/etc/issue.net"
-ssh_set "AcceptEnv"                   "LANG LC_*"
-ssh_set "UsePAM"                      "yes"
-ssh_set "Compression"                 "no"
+ssh_set "Protocol" "2"
+ssh_set "LogLevel" "VERBOSE"
+ssh_set "LoginGraceTime" "60"
+ssh_set "PermitRootLogin" "no"
+ssh_set "StrictModes" "yes"
+ssh_set "MaxAuthTries" "4"
+ssh_set "MaxSessions" "4"
+ssh_set "PubkeyAuthentication" "yes"
+ssh_set "IgnoreRhosts" "yes"
+ssh_set "HostbasedAuthentication" "no"
+ssh_set "PermitEmptyPasswords" "no"
+ssh_set "PermitUserEnvironment" "no"
+ssh_set "X11Forwarding" "no"
+ssh_set "PrintLastLog" "yes"
+ssh_set "TCPKeepAlive" "no"
+ssh_set "AllowTcpForwarding" "no"
+ssh_set "AllowAgentForwarding" "no"
+ssh_set "GatewayPorts" "no"
+ssh_set "ClientAliveInterval" "300"
+ssh_set "ClientAliveCountMax" "3"
+ssh_set "Banner" "/etc/issue.net"
+ssh_set "AcceptEnv" "LANG LC_*"
+ssh_set "UsePAM" "yes"
+ssh_set "Compression" "no"
 
 # CIS 5.2.13 – Strong ciphers only
 ssh_set "Ciphers" \
@@ -515,7 +529,7 @@ echo "==> [CIS 5.3] Configuring PAM and password policy..."
 apt-get install -y libpam-pwquality
 
 # -- CIS 5.3.1 – Password creation requirements --
-cat > /etc/security/pwquality.conf <<'PWQ'
+cat >/etc/security/pwquality.conf <<'PWQ'
 minlen  = 14
 dcredit = -1
 ucredit = -1
@@ -534,7 +548,7 @@ if [ -f /etc/pam.d/common-auth ] && ! grep -q "pam_faillock" /etc/pam.d/common-a
   sed -i '/^auth.*pam_unix.so/a auth [default=die] pam_faillock.so authfail audit deny=5 unlock_time=900' /etc/pam.d/common-auth
 fi
 if [ -f /etc/pam.d/common-account ] && ! grep -q "pam_faillock" /etc/pam.d/common-account; then
-  echo "account required pam_faillock.so" >> /etc/pam.d/common-account
+  echo "account required pam_faillock.so" >>/etc/pam.d/common-account
 fi
 
 # -- CIS 5.3.4 – Password reuse (remember last 5) --
@@ -552,19 +566,19 @@ echo "==> [CIS 5.4-5.5] Configuring password aging and account defaults..."
 
 # -- CIS 5.4.1.1-3 – Password expiry settings --
 sed -i 's/^PASS_MAX_DAYS.*/PASS_MAX_DAYS   365/' /etc/login.defs
-sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS   1/'   /etc/login.defs
-sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE   7/'   /etc/login.defs
+sed -i 's/^PASS_MIN_DAYS.*/PASS_MIN_DAYS   1/' /etc/login.defs
+sed -i 's/^PASS_WARN_AGE.*/PASS_WARN_AGE   7/' /etc/login.defs
 
 # -- CIS 5.4.1.4 – Lock inactive accounts after 30 days --
 useradd -D -f 30
 
 # -- CIS 5.4.4 – Default umask --
-echo "umask 027" > /etc/profile.d/cis-umask.sh
+echo "umask 027" >/etc/profile.d/cis-umask.sh
 chmod 644 /etc/profile.d/cis-umask.sh
 sed -i 's/^UMASK.*/UMASK           027/' /etc/login.defs
 
 # -- CIS 5.4.5 – Default shell timeout --
-echo "readonly TMOUT=900 ; export TMOUT" > /etc/profile.d/cis-timeout.sh
+echo "readonly TMOUT=900 ; export TMOUT" >/etc/profile.d/cis-timeout.sh
 chmod 644 /etc/profile.d/cis-timeout.sh
 
 # -- CIS 5.5 – Restrict su to wheel/sudo group --
@@ -581,7 +595,7 @@ echo "==> [CIS 5.3.7] Hardening sudo..."
 apt-get install -y sudo
 
 # Log sudo activity
-cat > /etc/sudoers.d/cis-logging <<'SUDO'
+cat >/etc/sudoers.d/cis-logging <<'SUDO'
 Defaults logfile="/var/log/sudo.log"
 Defaults log_input, log_output
 Defaults use_pty
@@ -605,7 +619,7 @@ chmod 640 /etc/shadow-
 chmod 644 /etc/group-
 chmod 640 /etc/gshadow-
 
-chown root:root   /etc/passwd /etc/group /etc/passwd- /etc/group-
+chown root:root /etc/passwd /etc/group /etc/passwd- /etc/group-
 chown root:shadow /etc/shadow /etc/gshadow /etc/shadow- /etc/gshadow-
 
 # Ensure no world-writable files in /etc
@@ -620,17 +634,17 @@ find / -xdev \( -nouser -o -nogroup \) -exec chown root:root {} \; 2>/dev/null |
 
 echo "==> [CIS 5.1] Securing cron..."
 [ -f /etc/crontab ] && chmod og-rwx /etc/crontab
-[ -d /etc/cron.hourly  ] && chmod og-rwx /etc/cron.hourly
-[ -d /etc/cron.daily   ] && chmod og-rwx /etc/cron.daily
-[ -d /etc/cron.weekly  ] && chmod og-rwx /etc/cron.weekly
+[ -d /etc/cron.hourly ] && chmod og-rwx /etc/cron.hourly
+[ -d /etc/cron.daily ] && chmod og-rwx /etc/cron.daily
+[ -d /etc/cron.weekly ] && chmod og-rwx /etc/cron.weekly
 [ -d /etc/cron.monthly ] && chmod og-rwx /etc/cron.monthly
-[ -d /etc/cron.d       ] && chmod og-rwx /etc/cron.d
+[ -d /etc/cron.d ] && chmod og-rwx /etc/cron.d
 
 # Allow only root to use cron/at
-echo "root" > /etc/cron.allow
-[ -f /etc/cron.deny  ] && rm -f /etc/cron.deny
-echo "root" > /etc/at.allow
-[ -f /etc/at.deny    ] && rm -f /etc/at.deny
+echo "root" >/etc/cron.allow
+[ -f /etc/cron.deny ] && rm -f /etc/cron.deny
+echo "root" >/etc/at.allow
+[ -f /etc/at.deny ] && rm -f /etc/at.deny
 
 echo "==> [CIS] Level 1 hardening complete."
 echo "==> NOTE: A reboot is recommended to apply bootloader/audit rule changes."

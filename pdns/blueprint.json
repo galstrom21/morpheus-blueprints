@@ -1,7 +1,7 @@
 {
   "blueprint": {
     "name": "PowerDNS 3-Node Cluster",
-    "description": "Three-node PowerDNS authoritative DNS cluster on Ubuntu 24.04 LTS, CIS Level 1 hardened. Node 1 acts as the primary (hosts MariaDB backend + PowerDNS). Nodes 2 and 3 are secondaries (PowerDNS only, connecting to the primary DB).",
+    "description": "Three-node PowerDNS authoritative DNS cluster on Ubuntu 24.04 LTS, CIS Level 1 hardened. Each node runs a local SQLite3 backend. Node 1 (primary) is the zone authority; Nodes 2 and 3 (secondaries) replicate zones via AXFR/NOTIFY using the PowerDNS autosecondary mechanism.",
     "type": "morpheus",
     "config": {
       "tiers": {
@@ -13,7 +13,7 @@
               "instance": {
                 "type": "ubuntu",
                 "name": "${app.name}-pdns-01",
-                "description": "PowerDNS Primary Node (MariaDB + pdns-server)",
+                "description": "PowerDNS Primary Node (SQLite3 backend + pdns-server, zone authority)",
                 "layout": {
                   "code": "ubuntu-2404-single",
                   "id": 0
@@ -63,7 +63,7 @@
               "instance": {
                 "type": "ubuntu",
                 "name": "${app.name}-pdns-02",
-                "description": "PowerDNS Secondary Node 2 (pdns-server only)",
+                "description": "PowerDNS Secondary Node 2 (SQLite3 backend + pdns-server, AXFR replica)",
                 "layout": {
                   "code": "ubuntu-2404-single",
                   "id": 0
@@ -104,7 +104,7 @@
               "instance": {
                 "type": "ubuntu",
                 "name": "${app.name}-pdns-03",
-                "description": "PowerDNS Secondary Node 3 (pdns-server only)",
+                "description": "PowerDNS Secondary Node 3 (SQLite3 backend + pdns-server, AXFR replica)",
                 "layout": {
                   "code": "ubuntu-2404-single",
                   "id": 0
@@ -153,26 +153,6 @@
           "required": true,
           "defaultValue": "",
           "fieldName": "pdns_api_key",
-          "fieldContext": "config"
-        },
-        {
-          "name": "db_root_password",
-          "label": "MariaDB Root Password",
-          "description": "Root password for the MariaDB instance on the primary node",
-          "type": "password",
-          "required": true,
-          "defaultValue": "",
-          "fieldName": "db_root_password",
-          "fieldContext": "config"
-        },
-        {
-          "name": "db_pdns_password",
-          "label": "PowerDNS DB User Password",
-          "description": "Password for the 'pdns' MariaDB user",
-          "type": "password",
-          "required": true,
-          "defaultValue": "",
-          "fieldName": "db_pdns_password",
           "fieldContext": "config"
         },
         {

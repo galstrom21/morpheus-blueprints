@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # PowerDNS Primary Node Setup
-# Installs MariaDB (backend) + PowerDNS Authoritative Server
+# Installs PowerDNS Authoritative Server with SQLite3 backend
+# Zone replication to secondaries is performed via native AXFR/NOTIFY.
 # Tested on Ubuntu 24.04 LTS
 # =============================================================================
 set -euo pipefail
@@ -9,12 +10,11 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Variables – override via environment or Morpheus custom options
 # ---------------------------------------------------------------------------
-DB_ROOT_PASSWORD="${db_root_password:-changeme_root}"
-DB_PDNS_PASSWORD="${db_pdns_password:-changeme_pdns}"
 PDNS_API_KEY="${pdns_api_key:-changeme_api}"
 ENABLE_RECURSOR="${pdns_recursor_enable:-false}"
 
 PRIMARY_IP="$(hostname -I | awk '{print $1}')"
+PDNS_DB=/var/lib/powerdns/pdns.db
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -23,32 +23,7 @@ export DEBIAN_FRONTEND=noninteractive
 # ---------------------------------------------------------------------------
 apt-get update -y
 apt-get upgrade -y
-apt-get install -y curl gnupg lsb-release software-properties-common ufw
-
-# ---------------------------------------------------------------------------
-# Install MariaDB
-# ---------------------------------------------------------------------------
-apt-get install -y mariadb-server
-
-systemctl enable mariadb
-systemctl start mariadb
-
-# Secure MariaDB and create PowerDNS database
-mysql -u root <<EOF
-ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
-DELETE FROM mysql.user WHERE User='';
-DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');
-DROP DATABASE IF EXISTS test;
-DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
-CREATE DATABASE IF NOT EXISTS pdns CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-CREATE USER IF NOT EXISTS 'pdns'@'%' IDENTIFIED BY '${DB_PDNS_PASSWORD}';
-GRANT ALL PRIVILEGES ON pdns.* TO 'pdns'@'%';
-FLUSH PRIVILEGES;
-EOF
-
-# Allow remote connections from the cluster subnet
-sed -i 's/^bind-address\s*=.*/bind-address = 0.0.0.0/' /etc/mysql/mariadb.conf.d/50-server.cnf
-systemctl restart mariadb
+apt-get install -y curl gnupg lsb-release software-properties-common ufw sqlite3
 
 # ---------------------------------------------------------------------------
 # Install PowerDNS Authoritative Server
@@ -57,12 +32,15 @@ systemctl restart mariadb
 sed -i 's/#DNSStubListener=yes/DNSStubListener=no/' /etc/systemd/resolved.conf
 systemctl restart systemd-resolved
 
-apt-get install -y pdns-server pdns-backend-mysql
+apt-get install -y pdns-server pdns-backend-sqlite3
 
 # ---------------------------------------------------------------------------
-# Initialise the PowerDNS schema
+# Initialise the PowerDNS SQLite3 schema
 # ---------------------------------------------------------------------------
-mysql -u root -p"${DB_ROOT_PASSWORD}" pdns < /usr/share/doc/pdns-backend-mysql/schema.mysql.sql
+install -d -o pdns -g pdns -m 750 /var/lib/powerdns
+sqlite3 "${PDNS_DB}" < /usr/share/doc/pdns-backend-sqlite3/schema.sqlite3.sql
+chown pdns:pdns "${PDNS_DB}"
+chmod 640 "${PDNS_DB}"
 
 # ---------------------------------------------------------------------------
 # Configure PowerDNS
@@ -84,19 +62,17 @@ webserver-address=0.0.0.0
 webserver-port=8081
 webserver-allow-from=127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 
-# MySQL backend
-launch=gmysql
-gmysql-host=127.0.0.1
-gmysql-port=3306
-gmysql-dbname=pdns
-gmysql-user=pdns
-gmysql-password=${DB_PDNS_PASSWORD}
-gmysql-dnssec=yes
+# SQLite3 backend
+launch=gsqlite3
+gsqlite3-database=${PDNS_DB}
+gsqlite3-dnssec=yes
 
-# Replication / AXFR (allow secondaries to transfer zones)
-allow-axfr-ips=127.0.0.1,::1
-master=yes
-slave=no
+# Replication – primary sends NOTIFY; secondaries pull via AXFR
+# allow-axfr-ips covers all RFC1918 ranges so cluster secondaries can transfer.
+# Set also-notify to secondary IPs post-deploy, or rely on NS-record-based NOTIFY.
+primary=yes
+secondary=no
+allow-axfr-ips=127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 
 # Misc
 log-dns-queries=no
@@ -132,7 +108,6 @@ ufw allow 22/tcp   comment "SSH"
 ufw allow 53/tcp   comment "DNS TCP"
 ufw allow 53/udp   comment "DNS UDP"
 ufw allow 8081/tcp comment "PowerDNS API"
-ufw allow 3306/tcp comment "MariaDB (cluster)"
 ufw --force enable
 
 # ---------------------------------------------------------------------------
@@ -144,10 +119,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [[ -f "${SCRIPT_DIR}/cis-hardening.sh" ]]; then
   bash "${SCRIPT_DIR}/cis-hardening.sh"
 else
-  # Fallback: download from Morpheus file store / bootstrap location
   echo "WARNING: cis-hardening.sh not found alongside this script; skipping CIS hardening."
 fi
 
-echo "==> Primary node setup complete. MariaDB is listening on ${PRIMARY_IP}:3306"
+echo "==> Primary node setup complete."
+echo "==> SQLite3 database: ${PDNS_DB}"
 echo "==> PowerDNS API available at http://${PRIMARY_IP}:8081"
+echo "==> Post-deploy: set 'also-notify' in pdns.conf with secondary IPs to trigger automatic zone transfers."
 echo "==> Reboot recommended to fully apply CIS hardening (bootloader + audit rules)."

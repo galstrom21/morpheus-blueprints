@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
 # PowerDNS Secondary Node Setup
-# Installs PowerDNS Authoritative Server connecting to the primary MariaDB
+# Installs PowerDNS Authoritative Server with a local SQLite3 backend.
+# Zones are replicated from the primary via AXFR/NOTIFY using the PowerDNS
+# autosecondary (superslave) mechanism – no shared database required.
 # Tested on Ubuntu 24.04 LTS
 # =============================================================================
 set -euo pipefail
@@ -9,14 +11,13 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Variables – override via environment or Morpheus custom options
 # ---------------------------------------------------------------------------
-DB_PDNS_PASSWORD="${db_pdns_password:-changeme_pdns}"
 PDNS_API_KEY="${pdns_api_key:-changeme_api}"
 ENABLE_RECURSOR="${pdns_recursor_enable:-false}"
 
-# The primary node IP is injected by Morpheus via linked tier variable
-# Morpheus exposes linked tier IPs as: <%=tiers.pdns-primary.instances[0].externalIp%>
-# This script expects it to be passed as PRIMARY_DB_HOST or resolved at runtime.
-PRIMARY_DB_HOST="${PRIMARY_DB_HOST:-<%=tiers['pdns-primary'].instances[0].externalIp%>}"
+# Primary node IP injected by Morpheus via linked-tier variable.
+PRIMARY_IP="${PRIMARY_IP:-<%=tiers['pdns-primary'].instances[0].externalIp%>}"
+
+PDNS_DB=/var/lib/powerdns/pdns.db
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -25,8 +26,7 @@ export DEBIAN_FRONTEND=noninteractive
 # ---------------------------------------------------------------------------
 apt-get update -y
 apt-get upgrade -y
-apt-get install -y curl gnupg lsb-release software-properties-common ufw
-
+apt-get install -y curl gnupg lsb-release software-properties-common ufw sqlite3
 
 # ---------------------------------------------------------------------------
 # Disable systemd-resolved stub listener to free port 53
@@ -37,7 +37,23 @@ systemctl restart systemd-resolved
 # ---------------------------------------------------------------------------
 # Install PowerDNS Authoritative Server
 # ---------------------------------------------------------------------------
-apt-get install -y pdns-server pdns-backend-mysql
+apt-get install -y pdns-server pdns-backend-sqlite3
+
+# ---------------------------------------------------------------------------
+# Initialise the PowerDNS SQLite3 schema
+# ---------------------------------------------------------------------------
+install -d -o pdns -g pdns -m 750 /var/lib/powerdns
+sqlite3 "${PDNS_DB}" < /usr/share/doc/pdns-backend-sqlite3/schema.sqlite3.sql
+chown pdns:pdns "${PDNS_DB}"
+chmod 640 "${PDNS_DB}"
+
+# ---------------------------------------------------------------------------
+# Register the primary as a trusted supermaster
+# When the primary sends a NOTIFY for a zone, this node will automatically
+# create the zone record and perform an AXFR to pull the zone data.
+# ---------------------------------------------------------------------------
+sqlite3 "${PDNS_DB}" \
+  "INSERT OR IGNORE INTO supermasters (ip, nameserver, account) VALUES ('${PRIMARY_IP}', 'primary', 'admin');"
 
 # ---------------------------------------------------------------------------
 # Configure PowerDNS
@@ -59,18 +75,16 @@ webserver-address=0.0.0.0
 webserver-port=8081
 webserver-allow-from=127.0.0.0/8,::1,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
 
-# MySQL backend (points to primary node)
-launch=gmysql
-gmysql-host=${PRIMARY_DB_HOST}
-gmysql-port=3306
-gmysql-dbname=pdns
-gmysql-user=pdns
-gmysql-password=${DB_PDNS_PASSWORD}
-gmysql-dnssec=yes
+# SQLite3 backend (local per-node database)
+launch=gsqlite3
+gsqlite3-database=${PDNS_DB}
+gsqlite3-dnssec=yes
 
-# Replication
-master=no
-slave=yes
+# Replication – pull zones from primary via AXFR on NOTIFY
+primary=no
+secondary=yes
+autosecondary=yes
+allow-notify-from=${PRIMARY_IP}
 
 # Misc
 log-dns-queries=no
@@ -121,5 +135,7 @@ else
 fi
 
 echo "==> Secondary node setup complete."
-echo "==> Connected to MariaDB on ${PRIMARY_DB_HOST}:3306"
+echo "==> SQLite3 database: ${PDNS_DB}"
+echo "==> Supermaster (primary) registered as: ${PRIMARY_IP}"
+echo "==> Zones will be automatically transferred when the primary sends NOTIFY."
 echo "==> Reboot recommended to fully apply CIS hardening (bootloader + audit rules)."

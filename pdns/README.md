@@ -2,13 +2,13 @@
 
 ## Architecture
 
-| Node | Role | Services |
-|------|------|----------|
-| `pdns-01` | Primary | MariaDB (backend) + PowerDNS Authoritative |
-| `pdns-02` | Secondary | PowerDNS Authoritative (remote DB) |
-| `pdns-03` | Secondary | PowerDNS Authoritative (remote DB) |
+| Node | Role | Backend | Services |
+|------|------|---------|----------|
+| `pdns-01` | Primary | SQLite3 (local) | PowerDNS Authoritative – zone authority |
+| `pdns-02` | Secondary | SQLite3 (local) | PowerDNS Authoritative – AXFR replica |
+| `pdns-03` | Secondary | SQLite3 (local) | PowerDNS Authoritative – AXFR replica |
 
-All three nodes serve DNS on port 53. The shared MariaDB instance on `pdns-01` holds the zone data. Secondaries connect to the primary DB over port 3306.
+Each node has its own local SQLite3 database. Zone data is created on `pdns-01` and automatically replicated to `pdns-02` and `pdns-03` using PowerDNS native AXFR/NOTIFY and the **autosecondary** mechanism — no shared database or network DB port required.
 
 ```
           ┌─────────────────────┐
@@ -16,16 +16,22 @@ All three nodes serve DNS on port 53. The shared MariaDB instance on `pdns-01` h
           └──────┬──────┬───────┘
                  │      │
         ┌────────▼─┐  ┌─▼────────┐
-        │ pdns-02  │  │ pdns-03  │  (Secondary – read DNS)
+        │ pdns-02  │  │ pdns-03  │  (Secondary – AXFR replica)
         │ pdns:53  │  │ pdns:53  │
+        │ sqlite3  │  │ sqlite3  │
         └────────┬─┘  └─┬────────┘
-                 │       │
+           NOTIFY/AXFR   NOTIFY/AXFR
         ┌────────▼───────▼────────┐
         │         pdns-01          │
-        │  MariaDB:3306            │
-        │  pdns:53  pdns-api:8081  │  (Primary)
+        │  pdns:53  pdns-api:8081  │  (Primary – zone authority)
+        │  sqlite3 (local)         │
         └──────────────────────────┘
 ```
+
+**Replication flow:**
+1. Zones are created/edited on `pdns-01` via the API or `pdnsutil`.
+2. `pdns-01` sends NOTIFY to secondaries (configure `also-notify` post-deploy with secondary IPs, or rely on NS-record-based NOTIFY).
+3. Each secondary's `supermasters` table contains the primary IP — on receiving a NOTIFY from it, the secondary auto-creates the zone and performs an AXFR to pull the data.
 
 ## Files
 
@@ -75,11 +81,10 @@ In **Provisioning → Apps → + Add App**:
 1. Select the **PowerDNS 3-Node Cluster** blueprint.
 2. Fill in the prompted options:
    - **PowerDNS API Key** – shared API key for all nodes
-   - **MariaDB Root Password** – root password for the primary DB
-   - **PowerDNS DB User Password** – password for the `pdns` DB user
    - **Enable PowerDNS Recursor** – optional, installs `pdns-recursor`
    - **GRUB Password Hash** – optional; output of `grub-mkpasswd-pbkdf2` for CIS 1.4.1
 3. Deploy. A reboot per node after provisioning is recommended to activate bootloader and audit rule changes.
+4. **Post-deploy:** SSH to `pdns-01` and add `also-notify = <pdns-02-ip>,<pdns-03-ip>` to `/etc/powerdns/pdns.conf`, then `systemctl reload pdns`. This ensures explicit NOTIFY is sent whenever zones change.
 
 ## CIS Level 1 Controls Applied
 
@@ -119,8 +124,10 @@ In **Provisioning → Apps → + Add App**:
 | `layout.code` | `blueprint.json` | Morpheus instance layout (must match your catalog) |
 | `plan.code` | `blueprint.json` | VM sizing plan code |
 | `network.idName` | `blueprint.json` | Target network name |
+| `PDNS_DB` | `primary-setup.sh` / `secondary-setup.sh` | Path to the SQLite3 database file |
 | `webserver-allow-from` | `primary-setup.sh` | Subnets allowed to reach the API |
-| `allow-axfr-ips` | `primary-setup.sh` | IPs allowed to perform AXFR zone transfers |
+| `allow-axfr-ips` | `primary-setup.sh` | Subnets allowed to perform AXFR zone transfers |
+| `also-notify` | `/etc/powerdns/pdns.conf` on pdns-01 | Explicit secondary IPs to send NOTIFY to (set post-deploy) |
 | `pwquality.conf` | `cis-hardening.sh` | Password complexity rules |
 | `pam_faillock deny=` | `cis-hardening.sh` | Account lockout threshold (default: 5) |
 | `PASS_MAX_DAYS` | `cis-hardening.sh` | Maximum password age in days (default: 365) |
@@ -128,5 +135,5 @@ In **Provisioning → Apps → + Add App**:
 ## Prerequisites
 
 - Ubuntu 24.04 image registered in Morpheus
-- Network connectivity between all three VMs on ports 22, 53, 3306, 8081
+- Network connectivity between all three VMs on ports 22, 53, and 8081
 - Morpheus linked-tier variable resolution enabled (used by `secondary-setup.sh` to discover the primary IP)
