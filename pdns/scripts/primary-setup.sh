@@ -21,9 +21,7 @@ export DEBIAN_FRONTEND=noninteractive
 # ---------------------------------------------------------------------------
 # System preparation
 # ---------------------------------------------------------------------------
-apt-get update -y
-apt-get upgrade -y
-apt-get install -y curl gnupg lsb-release software-properties-common ufw sqlite3
+sudo apt-get install -y curl gnupg lsb-release software-properties-common ufw sqlite3
 
 # ---------------------------------------------------------------------------
 # Install PowerDNS Authoritative Server
@@ -38,14 +36,14 @@ apt-get install -y pdns-server pdns-backend-sqlite3
 # Initialise the PowerDNS SQLite3 schema
 # ---------------------------------------------------------------------------
 install -d -o pdns -g pdns -m 750 /var/lib/powerdns
-sqlite3 "${PDNS_DB}" < /usr/share/doc/pdns-backend-sqlite3/schema.sqlite3.sql
+sqlite3 "${PDNS_DB}" </usr/share/doc/pdns-backend-sqlite3/schema.sqlite3.sql
 chown pdns:pdns "${PDNS_DB}"
 chmod 640 "${PDNS_DB}"
 
 # ---------------------------------------------------------------------------
 # Configure PowerDNS
 # ---------------------------------------------------------------------------
-cat > /etc/powerdns/pdns.conf <<PDNS_CONF
+cat >/etc/powerdns/pdns.conf <<PDNS_CONF
 # PowerDNS Authoritative Server – Primary Node
 setuid=pdns
 setgid=pdns
@@ -92,7 +90,7 @@ systemctl restart pdns
 # ---------------------------------------------------------------------------
 if [[ "${ENABLE_RECURSOR}" == "true" || "${ENABLE_RECURSOR}" == "on" ]]; then
   apt-get install -y pdns-recursor
-  cat > /etc/powerdns/recursor.conf <<REC_CONF
+  cat >/etc/powerdns/recursor.conf <<REC_CONF
 local-address=127.0.0.1
 local-port=5300
 forward-zones-recurse=.=8.8.8.8;8.8.4.4
@@ -104,9 +102,9 @@ fi
 # ---------------------------------------------------------------------------
 # Firewall
 # ---------------------------------------------------------------------------
-ufw allow 22/tcp   comment "SSH"
-ufw allow 53/tcp   comment "DNS TCP"
-ufw allow 53/udp   comment "DNS UDP"
+ufw allow 22/tcp comment "SSH"
+ufw allow 53/tcp comment "DNS TCP"
+ufw allow 53/udp comment "DNS UDP"
 ufw allow 8081/tcp comment "PowerDNS API"
 ufw --force enable
 
