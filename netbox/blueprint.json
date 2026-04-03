@@ -1,0 +1,123 @@
+{
+  "blueprint": {
+    "name": "NetBox",
+    "description": "Single-node NetBox instance on Ubuntu 24.04 LTS. Installs PostgreSQL, Redis, NetBox (via Git), Gunicorn, and nginx with a self-signed SSL certificate. All components are configured via an Ansible playbook.",
+    "type": "morpheus",
+    "config": {
+      "tiers": {
+        "netbox": {
+          "linkedTiers": [],
+          "tierIndex": 1,
+          "instances": [
+            {
+              "instance": {
+                "type": "ubuntu",
+                "name": "${app.name}-netbox",
+                "description": "NetBox – network source of truth (PostgreSQL + Redis + Gunicorn + nginx)",
+                "layout": {
+                  "code": "ubuntu-2404-single",
+                  "id": 0
+                },
+                "plan": {
+                  "code": "vm-4096"
+                },
+                "config": {
+                  "createUser": true,
+                  "resourcePoolId": null,
+                  "smbiosAssetTag": null,
+                  "nestedVirtualization": null,
+                  "vmwareFolderId": null
+                },
+                "volumes": [
+                  {
+                    "rootVolume": true,
+                    "name": "root",
+                    "size": 50,
+                    "storageType": 1
+                  }
+                ],
+                "networkInterfaces": [
+                  {
+                    "primaryInterface": true,
+                    "network": {
+                      "idName": "Management",
+                      "pool": {
+                        "idName": "Default Pool"
+                      }
+                    },
+                    "ipMode": "dhcp"
+                  }
+                ],
+                "taskSet": {
+                  "name": "netbox-install"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "options": [
+        {
+          "name": "netbox_version",
+          "label": "NetBox Version",
+          "description": "Git release tag to install (e.g. v4.3.4). See https://github.com/netbox-community/netbox/releases.",
+          "type": "text",
+          "required": false,
+          "defaultValue": "v4.3.4",
+          "fieldName": "netbox_version",
+          "fieldContext": "config"
+        },
+        {
+          "name": "db_password",
+          "label": "Database Password",
+          "description": "Password for the netbox PostgreSQL user. Use a strong, random value.",
+          "type": "password",
+          "required": true,
+          "defaultValue": "",
+          "fieldName": "db_password",
+          "fieldContext": "config"
+        },
+        {
+          "name": "allowed_hosts",
+          "label": "Allowed Hosts",
+          "description": "ALLOWED_HOSTS value for NetBox (hostname, IP, or * for any). Should match the server's DNS name or IP address.",
+          "type": "text",
+          "required": false,
+          "defaultValue": "*",
+          "fieldName": "allowed_hosts",
+          "fieldContext": "config"
+        },
+        {
+          "name": "admin_username",
+          "label": "Admin Username",
+          "description": "Username for the initial NetBox superuser account.",
+          "type": "text",
+          "required": false,
+          "defaultValue": "admin",
+          "fieldName": "admin_username",
+          "fieldContext": "config"
+        },
+        {
+          "name": "admin_password",
+          "label": "Admin Password",
+          "description": "Password for the initial NetBox superuser account.",
+          "type": "password",
+          "required": true,
+          "defaultValue": "",
+          "fieldName": "admin_password",
+          "fieldContext": "config"
+        },
+        {
+          "name": "admin_email",
+          "label": "Admin Email",
+          "description": "Email address for the initial NetBox superuser account.",
+          "type": "text",
+          "required": false,
+          "defaultValue": "admin@example.com",
+          "fieldName": "admin_email",
+          "fieldContext": "config"
+        }
+      ]
+    }
+  }
+}

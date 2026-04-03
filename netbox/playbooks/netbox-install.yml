@@ -1,0 +1,306 @@
+---
+# =============================================================================
+# NetBox Installation Playbook
+# Installs and configures NetBox with PostgreSQL, Redis, Gunicorn, and nginx
+# on Ubuntu 24.04 LTS.
+#
+# Expected Ansible extra-vars (provided via Morpheus blueprint options):
+#   netbox_version      – NetBox release tag  (default: v4.3.4)
+#   db_password         – PostgreSQL password for the netbox user (required)
+#   admin_username      – Django superuser username       (default: admin)
+#   admin_password      – Django superuser password       (required)
+#   admin_email         – Django superuser email address  (default: admin@example.com)
+#   allowed_hosts       – ALLOWED_HOSTS value             (default: *)
+# =============================================================================
+- name: Install NetBox
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    netbox_version: "{{ netbox_version | default('v4.3.4') }}"
+    netbox_db_name: netbox
+    netbox_db_user: netbox
+    netbox_db_password: "{{ db_password }}"
+    netbox_allowed_hosts: "{{ allowed_hosts | default('*') }}"
+    netbox_admin_username: "{{ admin_username | default('admin') }}"
+    netbox_admin_password: "{{ admin_password }}"
+    netbox_admin_email: "{{ admin_email | default('admin@example.com') }}"
+    netbox_path: /opt/netbox
+
+  pre_tasks:
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+  tasks:
+
+    # ── 1. PostgreSQL ──────────────────────────────────────────────────────────
+    - name: Install PostgreSQL
+      ansible.builtin.apt:
+        name: postgresql
+        state: present
+
+    - name: Start and enable PostgreSQL
+      ansible.builtin.service:
+        name: postgresql
+        state: started
+        enabled: true
+
+    - name: Create netbox PostgreSQL database, user, and grants
+      ansible.builtin.shell: |
+        set -euo pipefail
+        psql -tc "SELECT 1 FROM pg_database WHERE datname='{{ netbox_db_name }}'" \
+          | grep -q 1 || psql -c "CREATE DATABASE {{ netbox_db_name }};"
+        psql -tc "SELECT 1 FROM pg_roles WHERE rolname='{{ netbox_db_user }}'" \
+          | grep -q 1 || psql -c "CREATE USER {{ netbox_db_user }} WITH PASSWORD '{{ netbox_db_password }}';"
+        psql -c "ALTER DATABASE {{ netbox_db_name }} OWNER TO {{ netbox_db_user }};"
+        psql -d {{ netbox_db_name }} -c "GRANT CREATE ON SCHEMA public TO {{ netbox_db_user }};"
+      become: true
+      become_user: postgres
+      args:
+        executable: /bin/bash
+      no_log: true
+      changed_when: true
+
+    # ── 2. Redis ───────────────────────────────────────────────────────────────
+    - name: Install Redis
+      ansible.builtin.apt:
+        name: redis-server
+        state: present
+
+    - name: Start and enable Redis
+      ansible.builtin.service:
+        name: redis-server
+        state: started
+        enabled: true
+
+    # ── 3. NetBox system dependencies ─────────────────────────────────────────
+    - name: Install NetBox system packages
+      ansible.builtin.apt:
+        name:
+          - python3
+          - python3-pip
+          - python3-venv
+          - python3-dev
+          - build-essential
+          - libxml2-dev
+          - libxslt1-dev
+          - libffi-dev
+          - libpq-dev
+          - libssl-dev
+          - zlib1g-dev
+          - git
+        state: present
+
+    # ── 4. Clone NetBox ────────────────────────────────────────────────────────
+    - name: Create NetBox base directory
+      ansible.builtin.file:
+        path: "{{ netbox_path }}"
+        state: directory
+        mode: '0755'
+
+    - name: Clone NetBox repository at {{ netbox_version }}
+      ansible.builtin.git:
+        repo: https://github.com/netbox-community/netbox.git
+        dest: "{{ netbox_path }}"
+        version: "{{ netbox_version }}"
+        depth: 1
+        force: true
+
+    # ── 5. NetBox system user ──────────────────────────────────────────────────
+    - name: Create netbox system group
+      ansible.builtin.group:
+        name: netbox
+        system: true
+
+    - name: Create netbox system user
+      ansible.builtin.user:
+        name: netbox
+        system: true
+        group: netbox
+        shell: /usr/sbin/nologin
+        create_home: false
+
+    - name: Set ownership of netbox media, reports, and scripts directories
+      ansible.builtin.file:
+        path: "{{ netbox_path }}/netbox/{{ item }}"
+        state: directory
+        owner: netbox
+        group: netbox
+        recurse: true
+      loop:
+        - media
+        - reports
+        - scripts
+
+    # ── 6. Generate cryptographic secrets ─────────────────────────────────────
+    - name: Generate SECRET_KEY
+      ansible.builtin.command: python3 -c "import secrets; print(secrets.token_urlsafe(50))"
+      register: secret_key_result
+      changed_when: false
+      no_log: true
+
+    - name: Generate API_TOKEN_PEPPER
+      ansible.builtin.command: python3 -c "import secrets; print(secrets.token_urlsafe(50))"
+      register: api_pepper_result
+      changed_when: false
+      no_log: true
+
+    # ── 7. Write configuration.py ──────────────────────────────────────────────
+    - name: Write NetBox configuration.py
+      ansible.builtin.copy:
+        dest: "{{ netbox_path }}/netbox/netbox/configuration.py"
+        owner: root
+        group: netbox
+        mode: '0640'
+        content: |
+          # NetBox configuration – managed by Ansible, do not edit manually.
+
+          ALLOWED_HOSTS = ['{{ netbox_allowed_hosts }}']
+
+          DATABASES = {
+              'default': {
+                  'NAME': '{{ netbox_db_name }}',
+                  'USER': '{{ netbox_db_user }}',
+                  'PASSWORD': '{{ netbox_db_password }}',
+                  'HOST': 'localhost',
+                  'PORT': '',
+                  'CONN_MAX_AGE': 300,
+              }
+          }
+
+          REDIS = {
+              'tasks': {
+                  'HOST': 'localhost',
+                  'PORT': 6379,
+                  'PASSWORD': '',
+                  'DATABASE': 0,
+                  'SSL': False,
+              },
+              'caching': {
+                  'HOST': 'localhost',
+                  'PORT': 6379,
+                  'PASSWORD': '',
+                  'DATABASE': 1,
+                  'SSL': False,
+              }
+          }
+
+          SECRET_KEY = '{{ secret_key_result.stdout }}'
+
+          API_TOKEN_PEPPERS = {
+              1: '{{ api_pepper_result.stdout }}',
+          }
+      no_log: true
+
+    # ── 8. Run upgrade script ──────────────────────────────────────────────────
+    - name: Run NetBox upgrade.sh (creates venv, installs packages, runs migrations)
+      ansible.builtin.command: /opt/netbox/upgrade.sh
+      environment:
+        PYTHON: /usr/bin/python3
+      changed_when: true
+
+    # ── 9. Create Django superuser ─────────────────────────────────────────────
+    - name: Create NetBox superuser
+      ansible.builtin.shell: |
+        set -euo pipefail
+        source {{ netbox_path }}/venv/bin/activate
+        cd {{ netbox_path }}/netbox
+        python3 manage.py shell -c "
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        if not User.objects.filter(username='{{ netbox_admin_username }}').exists():
+            User.objects.create_superuser(
+                '{{ netbox_admin_username }}',
+                '{{ netbox_admin_email }}',
+                '{{ netbox_admin_password }}'
+            )
+        "
+      args:
+        executable: /bin/bash
+      no_log: true
+      changed_when: true
+
+    # ── 10. Gunicorn / systemd ─────────────────────────────────────────────────
+    - name: Copy gunicorn configuration
+      ansible.builtin.copy:
+        src: "{{ netbox_path }}/contrib/gunicorn.py"
+        dest: "{{ netbox_path }}/gunicorn.py"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Install NetBox systemd service files
+      ansible.builtin.copy:
+        src: "{{ netbox_path }}/contrib/{{ item }}"
+        dest: "/etc/systemd/system/{{ item }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+      loop:
+        - netbox.service
+        - netbox-rq.service
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start netbox and netbox-rq services
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        state: started
+        enabled: true
+      loop:
+        - netbox
+        - netbox-rq
+
+    # ── 11. nginx + self-signed SSL ────────────────────────────────────────────
+    - name: Install nginx
+      ansible.builtin.apt:
+        name: nginx
+        state: present
+
+    - name: Generate self-signed SSL certificate
+      ansible.builtin.command: >
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048
+        -keyout /etc/ssl/private/netbox.key
+        -out /etc/ssl/certs/netbox.crt
+        -subj "/CN={{ ansible_fqdn }}"
+      args:
+        creates: /etc/ssl/certs/netbox.crt
+
+    - name: Install NetBox nginx site configuration
+      ansible.builtin.copy:
+        src: "{{ netbox_path }}/contrib/nginx.conf"
+        dest: /etc/nginx/sites-available/netbox
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0644'
+
+    - name: Set server_name in nginx configuration
+      ansible.builtin.replace:
+        path: /etc/nginx/sites-available/netbox
+        regexp: 'netbox\.example\.com'
+        replace: "{{ ansible_fqdn }}"
+
+    - name: Remove default nginx site
+      ansible.builtin.file:
+        path: /etc/nginx/sites-enabled/default
+        state: absent
+
+    - name: Enable netbox nginx site
+      ansible.builtin.file:
+        src: /etc/nginx/sites-available/netbox
+        dest: /etc/nginx/sites-enabled/netbox
+        state: link
+
+    - name: Start and enable nginx
+      ansible.builtin.service:
+        name: nginx
+        state: restarted
+        enabled: true
